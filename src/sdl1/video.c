@@ -26,7 +26,39 @@
 
 #if defined(__PSP__)
 #include <pspdisplay.h>
+#include <pspgu.h>
+#include <pspgum.h>
+#include <GL/gl.h>
+#include <GL/glu.h>
+struct Vertex
+{
+	float u, v;
+	s16 x,y,z;
+};
+struct Vertex __attribute__((aligned(16))) Vertex_data2D[2] =
+{
+	{0,0,0,0,-1},
+	{0.625,0.78125,320,200,-1},
+};
 
+void OpenGL_DrawSurface(SDL_Surface *Surface,SDL_Rect View,SDL_Rect Clip){
+	glClearColor(0,0,0,0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	// setup texture
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glColorTable(GL_TEXTURE_2D,GL_RGBA,256*4, GL_RGBA,GL_UNSIGNED_BYTE,Surface->format->palette);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX8_EXT, 512, 256, 0, GL_COLOR_INDEX8_EXT, GL_UNSIGNED_BYTE,0);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 320, 200,GL_COLOR_INDEX8_EXT, GL_UNSIGNED_BYTE, Surface->pixels);
+	// draw image
+	glBegin( GL_QUADS );
+		glTexCoord2f(0,0);glVertex2i(View.x-Clip.x,View.y-Clip.y);
+		glTexCoord2f(0.625,0);glVertex2i(View.x+View.w+Clip.x,View.y-Clip.y);
+		glTexCoord2f(0.625,0.78125);glVertex2i(View.x+View.w+Clip.x,View.y+View.h+Clip.y);
+		glTexCoord2f(0,0.78125);glVertex2i(View.x-Clip.x,View.y+View.h+Clip.y);
+	glEnd();
+}
 static const int kWindowWidth = 480;
 static const int kWindowHeight = 272;
 #elif defined(_3DS)
@@ -39,9 +71,10 @@ static const int kWindowHeight = 480;
 static const int kWindowWidth = kScreenWidth * 4;
 static const int kWindowHeight = kScreenHeight * 4;
 #endif
-
+	
 SDL_Surface *gScreenSurface = NULL;
 uint8_t *gScreenPixels = NULL;
+uint8_t *gScreenPixels2 = NULL;
 SDL_Rect gScreenClipRect;
 SDL_Rect gWindowViewport;
 SDL_Surface *gWindowSurface = NULL;
@@ -58,13 +91,15 @@ void initializeVideo(uint8_t fastMode)
         spLogInfo("SDL_Init failed with %d", ret);
         exit(1);
     }
-
-    int flags = SDL_FULLSCREEN | SDL_SWSURFACE | SDL_HWPALETTE;
+    int flags = 0;
 #if defined(_3DS) && DEBUG
+	flags = SDL_FULLSCREEN | SDL_SWSURFACE | SDL_HWPALETTE;
     // When building debug mode for 3DS, show stdout in the bottom screen
 	flags |= SDL_CONSOLEBOTTOM;
 #endif	
-
+#if defined(__PSP__)
+	flags = SDL_FULLSCREEN | SDL_OPENGL | SDL_HWSURFACE | SDL_HWPALETTE;
+#endif
     SDL_WM_SetCaption("OpenSupaplex", "OpenSupaplex");
     gWindowSurface =  SDL_SetVideoMode(kWindowWidth,
                                       kWindowHeight,
@@ -78,36 +113,41 @@ void initializeVideo(uint8_t fastMode)
         exit(1);
     }
 
-    gScreenSurface = SDL_CreateRGBSurface(SDL_SWSURFACE, kScreenWidth, kScreenHeight, 8, 0, 0, 0, 0);
-
-    if (gScreenSurface == NULL)
+    gScreenSurface = SDL_CreateRGBSurface(SDL_HWSURFACE, kScreenWidth, kScreenHeight, 8, 0, 0, 0, 0);
+	if (gScreenSurface == NULL)
     {
         spLogInfo("Could not create a screen surface: %s", SDL_GetError());
         destroyVideo();
         exit(1);
     }
-
-    gScreenPixels = (uint8_t *)gScreenSurface->pixels;
-
+	
+	gScreenPixels = gScreenSurface->pixels;
+#if defined(__PSP__)
+	glEnable(GL_COLOR_TABLE);
+	glEnable(GL_TEXTURE_2D);
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrtho(0, 480, 272, 0, 1, -1);
+#endif	
+	
     updateWindowViewport();
 }
 
 void render()
 {
-    //SDL_BlitSurface(gScreenSurface, NULL, gWindowSurface, NULL); // TODO: use only this?
+#if defined(__PSP__)
+	OpenGL_DrawSurface(gScreenSurface,gWindowViewport,gScreenClipRect);
+#else
     SDL_SoftStretch(gScreenSurface, &gScreenClipRect, gWindowSurface, &gWindowViewport);
+#endif	
 }
 
 void present()
 {
-    SDL_Flip(gWindowSurface);
-
 #if defined(__PSP__)
-    // On PSP, only enable vsync for integer factor scaling. Otherwise, it will kill performance
-    if (gScalingMode == ScalingModeIntegerFactor)
-    {
-        sceDisplayWaitVblankStart();
-    }
+	SDL_GL_SwapBuffers();
+#else
+    SDL_Flip(gWindowSurface);
 #endif
 }
 
